@@ -19,7 +19,7 @@ int main(int argc, char *argv[]) {
 	char *str = NULL;
 	char *expr = NULL;
 
-	while ((opt = getopt(argc, argv, "i:r:s:")) != -1) {
+	while ((opt = getopt(argc, argv, "i:r:s:h")) != -1) {
 		switch(opt) {
 			case 'i':
 				interface = optarg;
@@ -33,6 +33,9 @@ int main(int argc, char *argv[]) {
 				str = optarg;
 				//printf("string: %s\n", str);
 				break;
+			case 'h':
+				system("cat help");
+				return 0;
 			default:
 				printf("Specify proper options\nUse mydump -h for Help\n");
 				return 0;
