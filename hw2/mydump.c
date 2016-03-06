@@ -1,6 +1,7 @@
 #include <pcap.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -20,123 +21,297 @@
 
 #include "struct.h"
 
+/*
+ * print data in rows of 16 bytes: offset   hex   ascii
+ *
+ * 00000   47 45 54 20 2f 20 48 54  54 50 2f 31 2e 31 0d 0a   GET / HTTP/1.1..
+ */
+void
+print_hex_ascii_line(const u_char *payload, int len, int offset)
+{
+
+	int i;
+	int gap;
+	const u_char *ch;
+
+	/* offset */
+	printf("%05d   ", offset);
+
+	/* hex */
+	ch = payload;
+	for (i = 0; i < len; i++) {
+		printf("%02x ", *ch);
+		ch++;
+		/* print extra space after 8th byte for visual aid */
+		if (i == 7)
+			printf(" ");
+	}
+	/* print space to handle line less than 8 bytes */
+	if (len < 8)
+		printf(" ");
+
+	/* fill hex gap with spaces if not full line */
+	if (len < 16) {
+		gap = 16 - len;
+		for (i = 0; i < gap; i++) {
+			printf("   ");
+		}
+	}
+	printf("   ");
+
+	/* ascii (if printable) */
+	ch = payload;
+	for (i = 0; i < len; i++) {
+		if (isprint(*ch))
+			printf("%c", *ch);
+		else
+			printf(".");
+		ch++;
+	}
+
+	printf("\n");
+
+	return;
+}
+
+/*
+ * print packet payload data (avoid printing binary data)
+ */
+void
+payload_print(const u_char *payload, int len)
+{
+
+	int len_rem = len;
+	int line_width = 16;			/* number of bytes per line */
+	int line_len;
+	int offset = 0;					/* zero-based offset counter */
+	const u_char *ch = payload;
+
+	if (len <= 0)
+		return;
+
+	/* data fits on one line */
+	if (len <= line_width) {
+		print_hex_ascii_line(ch, len, offset);
+		return;
+	}
+
+	/* data spans multiple lines */
+	for ( ;; ) {
+		/* compute current line length */
+		line_len = line_width % len_rem;
+		/* print line */
+		print_hex_ascii_line(ch, line_len, offset);
+		/* compute total remaining */
+		len_rem = len_rem - line_len;
+		/* shift pointer to remaining bytes to print */
+		ch = ch + line_len;
+		/* add offset */
+		offset = offset + line_width;
+		/* check if we have line width chars or less */
+		if (len_rem <= line_width) {
+			/* print last line and get out */
+			print_hex_ascii_line(ch, len_rem, offset);
+			break;
+		}
+	}
+
+	return;
+}
+
 void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet) {
-	
+
 	const struct sniff_ip *ip;
 	const struct sniff_tcp *tcp;
 	const struct sniff_udp *udp;
 	const u_char *payload;
 	struct ether_header *ethernet;
-	
+
 	int ip_size, tcp_size, udp_size = 8, icmp_size = 8, pay_size;
-	int i = ETHER_ADDR_LEN;
+	int i = ETHER_ADDR_LEN, ret, p = 0;
 	u_char *ptr;
-	char time[26];
+	char time[26], *str = NULL, print[160];
+	bool print_payload = false;
+
+	if (args != NULL) {
+		str = (char *) args;
+	}
 
 	time_t raw_time = (time_t)header->ts.tv_sec;
 	strftime(time, 26, "%Y:%m:%d %H:%M:%S", localtime(&raw_time));
-	printf("%s.%06d", time, header->ts.tv_usec);
+	ret = snprintf(print + p, 160, "%s.%06d", time, header->ts.tv_usec);
+	p += ret;
 
 	ethernet = (struct ether_header *) packet;
 	ptr = ethernet->ether_shost;
-    do{
-        printf("%s%02x",(i == ETHER_ADDR_LEN) ? " | " : ":",*ptr++);
-    }while(--i>0);
+	do {
+		ret = snprintf(print + p, 160, "%s%02x", (i == ETHER_ADDR_LEN) ? " | " : ":", *ptr++);
+		p += ret;
+	} while (--i > 0);
 
-    ptr = ethernet->ether_dhost;
-    i = ETHER_ADDR_LEN;
-    do{
-        printf("%s%02x",(i == ETHER_ADDR_LEN) ? " -> " : ":",*ptr++);
-    }while(--i>0);
+	ptr = ethernet->ether_dhost;
+	i = ETHER_ADDR_LEN;
+	do {
+		ret = snprintf(print + p, 160, "%s%02x", (i == ETHER_ADDR_LEN) ? " -> " : ":", *ptr++);
+		p += ret;
+	} while (--i > 0);
 
 	if (ntohs(ethernet->ether_type) == ETHERTYPE_IPV4) {
-		printf(" | type 0x%x", ETHERTYPE_IPV4);
+		ret = snprintf(print + p, 160, " | type 0x%x", ETHERTYPE_IPV4);
+		p += ret;
+
 		ip = (struct sniff_ip*)(packet + SIZE_ETHERNET);
-		ip_size = IP_HL(ip)*4;
+		ip_size = IP_HL(ip) * 4;
 		if (ip_size < 20) {
-			printf(" | Invalid IP header length : %u bytes\n", ip_size);
+			ret = snprintf(print + p, 160, " | Invalid IP header length : %u bytes\n", ip_size);
+			p += ret;
+			print[p] = 0;
+			printf("%s", print);
 			return;
 		}
 
 		if (ip->ip_p == IPPROTO_TCP) {
 
 			tcp = (struct sniff_tcp*)(packet + SIZE_ETHERNET + ip_size);
-			printf(" | len %d ", ntohs(ip->ip_len));
-			printf(" | %s.%d -> ", inet_ntoa(ip->ip_src), ntohs(tcp->th_sport));
-			printf("%s.%d ", inet_ntoa(ip->ip_dst), ntohs(tcp->th_dport));
-			printf(" | TCP");
-			
-			tcp_size = TH_OFF(tcp)*4;
+			ret = snprintf(print + p, 160, " | len %d ", ntohs(ip->ip_len));
+			p += ret;
+			ret = snprintf(print + p, 160, " | %s.%d -> ", inet_ntoa(ip->ip_src), ntohs(tcp->th_sport));
+			p += ret;
+			ret = snprintf(print + p, 160, "%s.%d ", inet_ntoa(ip->ip_dst), ntohs(tcp->th_dport));
+			p += ret;
+			ret = snprintf(print + p, 160, " | TCP");
+			p += ret;
+
+			tcp_size = TH_OFF(tcp) * 4;
 			if (tcp_size < 20) {
-				printf(" | Invalid TCP header length : %u bytes\n", tcp_size);
+				ret = snprintf(print + p, 160, " | Invalid TCP header length : %u bytes\n", tcp_size);
+				p += ret;
+				print[p] = 0;
+				printf("%s", print);
 				return;
 			}
 
 			payload = (u_char *)(packet + SIZE_ETHERNET + ip_size + tcp_size);
 			pay_size = ntohs(ip->ip_len) - (ip_size + tcp_size);
-			
+
 			if (pay_size > 0) {
-				printf(" | Payload : %d bytes\n", pay_size);
-				//print_payload(payload, pay_size);
+				if (str != NULL) {
+					if (strstr((char *) payload, str) == NULL)
+						return;
+				}
+
+				ret = snprintf(print + p, 160, " | Payload : %d bytes\n", pay_size);
+				p += ret;
+				print_payload = true;
 			}
-			else
-				printf("\n");
+			else {
+				if (str != NULL)
+					return;
+
+				ret = snprintf(print + p, 160, "\n");
+				p += ret;
+			}
 		} else if (ip->ip_p == IPPROTO_UDP) {
 
 			udp = (struct sniff_udp*)(packet + SIZE_ETHERNET + ip_size);
-			printf(" | len %d ", ntohs(ip->ip_len));
-			printf(" | %s.%d -> ", inet_ntoa(ip->ip_src), ntohs(udp->sport));
-			printf("%s.%d ", inet_ntoa(ip->ip_dst), ntohs(udp->dport));
-			printf(" | UDP");
-			
+			ret = snprintf(print + p, 160, " | len %d ", ntohs(ip->ip_len));
+			p += ret;
+			ret = snprintf(print + p, 160, " | %s.%d -> ", inet_ntoa(ip->ip_src), ntohs(udp->sport));
+			p += ret;
+			ret = snprintf(print + p, 160, "%s.%d ", inet_ntoa(ip->ip_dst), ntohs(udp->dport));
+			p += ret;
+			ret = snprintf(print + p, 160, " | UDP");
+			p += ret;
+
 			payload = (u_char *)(packet + SIZE_ETHERNET + ip_size + udp_size);
 			pay_size = ntohs(ip->ip_len) - (ip_size + udp_size);
-			
+
 			if (pay_size > 0)
 			{
-				printf(" | Payload : %d bytes\n", pay_size);
-				//print_payload(payload, pay_size);
-			} 
-			else
-				printf("\n");
+				if (str != NULL) {
+					if (strstr((char *) payload, str) == NULL)
+						return;
+				}
+
+				ret = snprintf(print + p, 160, " | Payload : %d bytes\n", pay_size);
+				p += ret;
+				print_payload = true;
+			}
+			else {
+				if (str != NULL)
+					return;
+
+				ret = snprintf(print + p, 160, "\n");
+				p += ret;
+			}
 		} else if (ip->ip_p == IPPROTO_ICMP) {
 
-			printf(" | len %d ", ntohs(ip->ip_len));
-			printf(" | %s -> ", inet_ntoa(ip->ip_src));
-			printf("%s ", inet_ntoa(ip->ip_dst));
+			ret = snprintf(print + p, 160, " | len %d ", ntohs(ip->ip_len));
+			p += ret;
+			ret = snprintf(print + p, 160, " | %s -> ", inet_ntoa(ip->ip_src));
+			p += ret;
+			ret = snprintf(print + p, 160, "%s ", inet_ntoa(ip->ip_dst));
+			p += ret;
 
-			printf(" | ICMP");
-			
+			ret = snprintf(print + p, 160, " | ICMP");
+			p += ret;
+
 			payload = (u_char *)(packet + SIZE_ETHERNET + ip_size + icmp_size);
 			pay_size = ntohs(ip->ip_len) - (ip_size + icmp_size);
-			
+
 			if (pay_size > 0)
 			{
-				printf(" | Payload : %d bytes\n", pay_size);
-				//print_payload(payload, pay_size);
-			} 
-			else
-				printf("\n");
+				if (str != NULL) {
+					if (strstr((char *) payload, str) == NULL)
+						return;
+				}
+
+				ret = snprintf(print + p, 160, " | Payload : %d bytes\n", pay_size);
+				p += ret;
+				print_payload = true;
+			}
+			else {
+				if (str != NULL)
+					return;
+
+				ret = snprintf(print + p, 160, "\n");
+				p += ret;
+			}
 		} else {
-			printf(" | 0x%x", ip->ip_p);
+			ret = snprintf(print + p, 160, " | 0x%x", ip->ip_p);
+			p += ret;
 
 			payload = (u_char *)(packet + SIZE_ETHERNET + ip_size);
 			pay_size = ntohs(ip->ip_len) - (ip_size);
-			
-			// print payload
+
 			if (pay_size > 0)
 			{
-				printf(" | Payload : %d bytes)\n", pay_size);
-				//print_payload(payload, pay_size);
-			} 
-			else
-				printf("\n");
+				if (str != NULL) {
+					if (strstr((char *) payload, str) == NULL)
+						return;
+				}
+
+				ret = snprintf(print + p, 160, " | Payload : %d bytes)\n", pay_size);
+				p += ret;
+				print_payload = true;
+			}
+			else {
+				if (str != NULL)
+					return;
+
+				ret = snprintf(print + p, 160, "\n");
+				p += ret;
+			}
 		}
-	} else if (ntohs(ethernet->ether_type) == ETHERTYPE_ARP) {
-		printf(" | type 0x%x\n", ETHERTYPE_ARP);
-	} else {
-		printf(" | type 0x%x\n", ntohs(ethernet->ether_type));
+	} else if(str == NULL) {
+		ret = snprintf(print + p, 160, " | type 0x%x\n", ntohs(ethernet->ether_type));
+		p += ret;
 	}
+
+	print[p] = 0;
+	printf("%s", print);
+	if (print_payload == true)
+		payload_print(payload, pay_size);
 }
 
 int main(int argc, char *argv[]) {
@@ -153,38 +328,41 @@ int main(int argc, char *argv[]) {
 	bpf_u_int32 net;
 
 	while ((opt = getopt(argc, argv, "i:r:s:h")) != -1) {
-		switch(opt) {
-			case 'i':
-				interface = optarg;
-				//printf("interface: %s\n", interface);
-				break;
-			case 'r':
-				file = optarg;
-				//printf("file: %s\n", file);
-				break;
-			case 's':
-				str = optarg;
-				//printf("string: %s\n", str);
-				break;
-			case 'h':
-				system("cat help");
-				return 0;
-			default:
-				printf("Specify proper options\nUse mydump -h for Help\n");
-				return 0;
+		switch (opt) {
+		case 'i':
+			interface = optarg;
+			//printf("interface: %s\n", interface);
+			break;
+		case 'r':
+			file = optarg;
+			//printf("file: %s\n", file);
+			break;
+		case 's':
+			str = optarg;
+			//printf("string: %s\n", str);
+			break;
+		case 'h':
+			system("cat help");
+			return 0;
+		default:
+			printf("Specify proper options\nUse mydump -h for Help\n");
+			return 0;
 		}
 	}
 
-	if(argc > 4) {
+	if (optind < argc - 1) {
 		printf("Specify proper options\nUse mydump -h for Help\n");
 		return 0;
 	}
-
-	if(argc == 4)
+	else if (optind == argc - 1)
 		expr = argv[argc - 1];
-	//printf("expr: %s\n", expr);
 
-	if (argc == 1) {
+	if (interface != NULL && file != NULL) {
+		printf("Specify proper options\nUse mydump -h for Help\n");
+		return 0;
+	}
+	
+	if (interface == NULL && file == NULL) {
 		interface = pcap_lookupdev(err);
 		if (interface == NULL) {
 			printf("pcap_lookupdev error : %s\n", err);
