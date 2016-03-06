@@ -128,7 +128,7 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 	struct ether_header *ethernet;
 
 	int ip_size, tcp_size, udp_size = 8, icmp_size = 8, pay_size;
-	int i = ETHER_ADDR_LEN, ret, p = 0;
+	int i = ETHER_ADDR_LEN, pos = 0;
 	u_char *ptr;
 	char time[26], *str = NULL, print[160];
 	bool print_payload = false;
@@ -139,33 +139,28 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 
 	time_t raw_time = (time_t)header->ts.tv_sec;
 	strftime(time, 26, "%Y:%m:%d %H:%M:%S", localtime(&raw_time));
-	ret = snprintf(print + p, 160, "%s.%06d", time, header->ts.tv_usec);
-	p += ret;
+	pos += snprintf(print + pos, 160, "%s.%06d", time, header->ts.tv_usec);
 
 	ethernet = (struct ether_header *) packet;
 	ptr = ethernet->ether_shost;
 	do {
-		ret = snprintf(print + p, 160, "%s%02x", (i == ETHER_ADDR_LEN) ? " | " : ":", *ptr++);
-		p += ret;
+		pos += snprintf(print + pos, 160, "%s%02x", (i == ETHER_ADDR_LEN) ? " | " : ":", *ptr++);
 	} while (--i > 0);
 
 	ptr = ethernet->ether_dhost;
 	i = ETHER_ADDR_LEN;
 	do {
-		ret = snprintf(print + p, 160, "%s%02x", (i == ETHER_ADDR_LEN) ? " -> " : ":", *ptr++);
-		p += ret;
+		pos += snprintf(print + pos, 160, "%s%02x", (i == ETHER_ADDR_LEN) ? " -> " : ":", *ptr++);
 	} while (--i > 0);
 
 	if (ntohs(ethernet->ether_type) == ETHERTYPE_IPV4) {
-		ret = snprintf(print + p, 160, " | type 0x%x", ETHERTYPE_IPV4);
-		p += ret;
+		pos += snprintf(print + pos, 160, " | type 0x%x", ETHERTYPE_IPV4);
 
 		ip = (struct sniff_ip*)(packet + SIZE_ETHERNET);
 		ip_size = IP_HL(ip) * 4;
 		if (ip_size < 20) {
-			ret = snprintf(print + p, 160, " | Invalid IP header length : %u bytes\n", ip_size);
-			p += ret;
-			print[p] = 0;
+			pos += snprintf(print + pos, 160, " | Invalid IP header length : %u bytes\n", ip_size);
+			print[pos] = 0;
 			printf("%s", print);
 			return;
 		}
@@ -173,20 +168,15 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 		if (ip->ip_p == IPPROTO_TCP) {
 
 			tcp = (struct sniff_tcp*)(packet + SIZE_ETHERNET + ip_size);
-			ret = snprintf(print + p, 160, " | len %d ", ntohs(ip->ip_len));
-			p += ret;
-			ret = snprintf(print + p, 160, " | %s.%d -> ", inet_ntoa(ip->ip_src), ntohs(tcp->th_sport));
-			p += ret;
-			ret = snprintf(print + p, 160, "%s.%d ", inet_ntoa(ip->ip_dst), ntohs(tcp->th_dport));
-			p += ret;
-			ret = snprintf(print + p, 160, " | TCP");
-			p += ret;
+			pos += snprintf(print + pos, 160, " | len %d", ntohs(ip->ip_len));
+			pos += snprintf(print + pos, 160, " | %s.%d ->", inet_ntoa(ip->ip_src), ntohs(tcp->th_sport));
+			pos += snprintf(print + pos, 160, " %s.%d", inet_ntoa(ip->ip_dst), ntohs(tcp->th_dport));
+			pos += snprintf(print + pos, 160, " | TCP");
 
 			tcp_size = TH_OFF(tcp) * 4;
 			if (tcp_size < 20) {
-				ret = snprintf(print + p, 160, " | Invalid TCP header length : %u bytes\n", tcp_size);
-				p += ret;
-				print[p] = 0;
+				pos += snprintf(print + pos, 160, " | Invalid TCP header length : %u bytes\n", tcp_size);
+				print[pos] = 0;
 				printf("%s", print);
 				return;
 			}
@@ -200,28 +190,22 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 						return;
 				}
 
-				ret = snprintf(print + p, 160, " | Payload : %d bytes\n", pay_size);
-				p += ret;
+				pos += snprintf(print + pos, 160, " | Payload : %d bytes\n", pay_size);
 				print_payload = true;
 			}
 			else {
 				if (str != NULL)
 					return;
 
-				ret = snprintf(print + p, 160, "\n");
-				p += ret;
+				pos += snprintf(print + pos, 160, "\n");
 			}
 		} else if (ip->ip_p == IPPROTO_UDP) {
 
 			udp = (struct sniff_udp*)(packet + SIZE_ETHERNET + ip_size);
-			ret = snprintf(print + p, 160, " | len %d ", ntohs(ip->ip_len));
-			p += ret;
-			ret = snprintf(print + p, 160, " | %s.%d -> ", inet_ntoa(ip->ip_src), ntohs(udp->sport));
-			p += ret;
-			ret = snprintf(print + p, 160, "%s.%d ", inet_ntoa(ip->ip_dst), ntohs(udp->dport));
-			p += ret;
-			ret = snprintf(print + p, 160, " | UDP");
-			p += ret;
+			pos += snprintf(print + pos, 160, " | len %d", ntohs(ip->ip_len));
+			pos += snprintf(print + pos, 160, " | %s.%d ->", inet_ntoa(ip->ip_src), ntohs(udp->sport));
+			pos += snprintf(print + pos, 160, " %s.%d", inet_ntoa(ip->ip_dst), ntohs(udp->dport));
+			pos += snprintf(print + pos, 160, " | UDP");
 
 			payload = (u_char *)(packet + SIZE_ETHERNET + ip_size + udp_size);
 			pay_size = ntohs(ip->ip_len) - (ip_size + udp_size);
@@ -233,28 +217,22 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 						return;
 				}
 
-				ret = snprintf(print + p, 160, " | Payload : %d bytes\n", pay_size);
-				p += ret;
+				pos += snprintf(print + pos, 160, " | Payload : %d bytes\n", pay_size);
 				print_payload = true;
 			}
 			else {
 				if (str != NULL)
 					return;
 
-				ret = snprintf(print + p, 160, "\n");
-				p += ret;
+				pos += snprintf(print + pos, 160, "\n");
 			}
 		} else if (ip->ip_p == IPPROTO_ICMP) {
 
-			ret = snprintf(print + p, 160, " | len %d ", ntohs(ip->ip_len));
-			p += ret;
-			ret = snprintf(print + p, 160, " | %s -> ", inet_ntoa(ip->ip_src));
-			p += ret;
-			ret = snprintf(print + p, 160, "%s ", inet_ntoa(ip->ip_dst));
-			p += ret;
+			pos += snprintf(print + pos, 160, " | len %d", ntohs(ip->ip_len));
+			pos += snprintf(print + pos, 160, " | %s ->", inet_ntoa(ip->ip_src));
+			pos += snprintf(print + pos, 160, " %s", inet_ntoa(ip->ip_dst));
 
-			ret = snprintf(print + p, 160, " | ICMP");
-			p += ret;
+			pos += snprintf(print + pos, 160, " | ICMP");
 
 			payload = (u_char *)(packet + SIZE_ETHERNET + ip_size + icmp_size);
 			pay_size = ntohs(ip->ip_len) - (ip_size + icmp_size);
@@ -266,20 +244,17 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 						return;
 				}
 
-				ret = snprintf(print + p, 160, " | Payload : %d bytes\n", pay_size);
-				p += ret;
+				pos += snprintf(print + pos, 160, " | Payload : %d bytes\n", pay_size);
 				print_payload = true;
 			}
 			else {
 				if (str != NULL)
 					return;
 
-				ret = snprintf(print + p, 160, "\n");
-				p += ret;
+				pos += snprintf(print + pos, 160, "\n");
 			}
 		} else {
-			ret = snprintf(print + p, 160, " | 0x%x", ip->ip_p);
-			p += ret;
+			pos += snprintf(print + pos, 160, " | 0x%x", ip->ip_p);
 
 			payload = (u_char *)(packet + SIZE_ETHERNET + ip_size);
 			pay_size = ntohs(ip->ip_len) - (ip_size);
@@ -291,24 +266,21 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 						return;
 				}
 
-				ret = snprintf(print + p, 160, " | Payload : %d bytes)\n", pay_size);
-				p += ret;
+				pos += snprintf(print + pos, 160, " | Payload : %d bytes)\n", pay_size);
 				print_payload = true;
 			}
 			else {
 				if (str != NULL)
 					return;
 
-				ret = snprintf(print + p, 160, "\n");
-				p += ret;
+				pos += snprintf(print + pos, 160, "\n");
 			}
 		}
-	} else if(str == NULL) {
-		ret = snprintf(print + p, 160, " | type 0x%x\n", ntohs(ethernet->ether_type));
-		p += ret;
+	} else if (str == NULL) {
+		pos += snprintf(print + pos, 160, " | type 0x%x\n", ntohs(ethernet->ether_type));
 	}
 
-	print[p] = 0;
+	print[pos] = 0;
 	printf("%s", print);
 	if (print_payload == true)
 		payload_print(payload, pay_size);
@@ -361,7 +333,7 @@ int main(int argc, char *argv[]) {
 		printf("Specify proper options\nUse mydump -h for Help\n");
 		return 0;
 	}
-	
+
 	if (interface == NULL && file == NULL) {
 		interface = pcap_lookupdev(err);
 		if (interface == NULL) {
@@ -413,3 +385,6 @@ int main(int argc, char *argv[]) {
 	pcap_close(handle);
 	return 0;
 }
+
+//http://www.tcpdump.org/pcap.html
+//http://www.tcpdump.org/sniffex.c
