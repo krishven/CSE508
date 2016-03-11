@@ -185,10 +185,8 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 			pay_size = ntohs(ip->ip_len) - (ip_size + tcp_size);
 
 			if (pay_size > 0) {
-				if (str != NULL) {
-					if (strstr((char *) payload, str) == NULL)
+				if (str != NULL && strstr((char *) payload, str) == NULL)
 						return;
-				}
 
 				pos += snprintf(print + pos, 160, " | Payload : %d bytes\n", pay_size);
 				print_payload = true;
@@ -210,12 +208,9 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 			payload = (u_char *)(packet + SIZE_ETHERNET + ip_size + udp_size);
 			pay_size = ntohs(ip->ip_len) - (ip_size + udp_size);
 
-			if (pay_size > 0)
-			{
-				if (str != NULL) {
-					if (strstr((char *) payload, str) == NULL)
+			if (pay_size > 0) {
+				if (str != NULL && strstr((char *) payload, str) == NULL)
 						return;
-				}
 
 				pos += snprintf(print + pos, 160, " | Payload : %d bytes\n", pay_size);
 				print_payload = true;
@@ -239,10 +234,8 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 
 			if (pay_size > 0)
 			{
-				if (str != NULL) {
-					if (strstr((char *) payload, str) == NULL)
+				if (str != NULL && strstr((char *) payload, str) == NULL)
 						return;
-				}
 
 				pos += snprintf(print + pos, 160, " | Payload : %d bytes\n", pay_size);
 				print_payload = true;
@@ -261,10 +254,8 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 
 			if (pay_size > 0)
 			{
-				if (str != NULL) {
-					if (strstr((char *) payload, str) == NULL)
+				if (str != NULL && strstr((char *) payload, str) == NULL)
 						return;
-				}
 
 				pos += snprintf(print + pos, 160, " | Payload : %d bytes)\n", pay_size);
 				print_payload = true;
