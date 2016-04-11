@@ -1,0 +1,25 @@
+pbproxy
+=======
+
+In one terminal(server),
+
+./pbproxy -k mykey -l 2222 localhost 22
+
+From any no.of other terminals(clients),
+
+ssh -o "ProxyCommand ./pbproxy -k mykey localhost 2222" localhost
+
+"pbproxy" can act both as a client-side proxy and as server-side reverse proxy. In client and server, a local instance of pbroxy will encrypt the traffic using the same symmetric key used by the server. A wrong or unknown key will not allow access.
+
+Design
+======
+
+In server side, the process() function will start to listen to the port specified in the connection structure argument. If a new connection is established, a new thread is started to handle it. In the thread, a tcp connection is created, then data is read from the incoming socket and the newly socket created in the while loop. Both sockets are set to non-blocking mode, similar to client side.
+The first 8 bytes received in the connection socket are considered as iv, then the rest of the data is decrypted using the iv. Then decrypted data is written to another socket. If something is received from the newly created socket, the original data is simply written to the first socket.
+
+At client mode, an infinite while loop tries to read from stdin and socket. Both of them are set to non-blocking mode to avoid blocking forever. If received something from stdin, an 8-byte iv is generated, the data is encrypted using key and iv, then both of them are put into another memory block and sent together. If received something from socket, it is written to stdout.
+
+References
+==========
+
+AES CTR Encryption - http://www.gurutechnologies.net/blog/aes-ctr-encryption-in-c/
