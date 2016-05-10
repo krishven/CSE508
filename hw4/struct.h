@@ -6,12 +6,12 @@ struct list {
 
 /* DNS header */
 struct dns_header {
-  char id[2];
-  char flags[2];
-  char qdcount[2];
-  char ancount[2];
-  char nscount[2];
-  char arcount[2];
+  u_int16_t id;
+  u_int16_t flags;
+  u_int16_t qdcount;
+  u_int16_t ancount;
+  u_int16_t nscount;
+  u_int16_t arcount;
 };
 
 /* DNS query */

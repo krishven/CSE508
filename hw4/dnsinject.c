@@ -1,139 +1,120 @@
 #include <stdio.h>
 #include <unistd.h>
-#include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
-#include <ctype.h>
-#include <assert.h>
-#include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <net/ethernet.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
-#include <time.h>
-
 #include <pcap.h>
 #include <netdb.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
-#include <arpa/inet.h>
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <netinet/in.h>
 #include <resolv.h>
 
 #include "struct.h"
 
 #define IP_SIZE 16
-#define REQUEST_SIZE 100
-#define PCAP_INTERFACENAME_SIZE 16
-#define FILTER_SIZE 200
 #define PKT_SIZE 8192
+#define DNS_HEADER_SIZE 12
+#define UDP_HEADER_SIZE 8
+#define IP_HEADER_SIZE 20
+#define ETHERNET_SIZE 14
 
-void send_response(char* ip, u_int16_t port, char* packet, int packlen) {
-  struct sockaddr_in to_addr;
-  int bytes_sent;
-  int one = 1;
-  const int *val = &one;
-
-  to_addr.sin_family = AF_INET;
-  to_addr.sin_port = htons(port);
-  to_addr.sin_addr.s_addr = inet_addr(ip);
-
-  int sock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
-  if (sock < 0) {
-    printf("Socket error");
-    return;
-  }
-
-  if (setsockopt(sock, IPPROTO_IP, IP_HDRINCL, val, sizeof(one)) < 0) {
-    printf("setsockopt error");
-    return;
-  }
-
-  bytes_sent = sendto(sock, packet, packlen, 0, (struct sockaddr *)&to_addr, sizeof(to_addr));
-  if (bytes_sent < 0)
-    printf("Error sending data");
-}
-
-unsigned short checksum(unsigned short *buf, int nwords) {
-  unsigned long sum;
-  for (sum = 0; nwords > 0; nwords--)
-    sum += *buf++;
-  sum = (sum >> 16) + (sum & 0xffff);
-  sum += (sum >> 16);
-  return ~sum;
-}
-
-void get_data(char* data, unsigned int payload_size, char* src_ip, char* dst_ip, u_int16_t port) {
+void get_data(char* data, unsigned int size, char* src_ip, char* dst_ip, u_int16_t port) {
   struct ip *iph = (struct ip *) data;
-  struct udphdr *udph = (struct udphdr *) (data + sizeof (struct ip));
+  struct udphdr *udph = (struct udphdr *) (data + IP_HEADER_SIZE);
+  unsigned long sum;
+  int n;
+  unsigned short *buf;
 
   iph->ip_hl = 5;
   iph->ip_v = 4;
   iph->ip_tos = 0;
-  iph->ip_len = sizeof(struct ip) + sizeof(struct udphdr) + payload_size; 
+  iph->ip_ttl = 255;
+  iph->ip_len = IP_HEADER_SIZE + UDP_HEADER_SIZE + size;
   iph->ip_id = 0;
   iph->ip_off = 0;
-  iph->ip_ttl = 255;
   iph->ip_p = 17;
   iph->ip_sum = 0;
-  iph->ip_src.s_addr = inet_addr (dst_ip);
+  iph->ip_src.s_addr = inet_addr(dst_ip);
   iph->ip_dst.s_addr = inet_addr(src_ip);
+
+  buf = (unsigned short *) data;
+  n = iph->ip_len >> 1;
+  for (sum = 0; n > 0; n--)
+    sum += *buf++;
+  sum = (sum >> 16) + (sum & 0xffff);
+  sum += (sum >> 16);
+
+  iph->ip_sum = ~sum;
 
   udph->source = htons(53);
   udph->dest = htons(port);
-  udph->len = htons(sizeof(struct udphdr) + payload_size);
+  udph->len = htons(UDP_HEADER_SIZE + size);
   udph->check = 0;
-
-  iph->ip_sum = checksum((unsigned short *) data, iph->ip_len >> 1);
 }
 
-unsigned int get_ans(char *ip, struct dns_header *dns_hdr, char* answer, char* request) {
-  unsigned int size = 0; /* answer size */
-  struct dns_query *dns_q;
+unsigned int get_ans(char *ip, struct dns_header *dns, char* answer, char* request) {
+  unsigned int size = 0;
+  struct dns_query *query;
   unsigned char ans[4];
 
   sscanf(ip, "%d.%d.%d.%d", (int *)&ans[0], (int *)&ans[1], (int *)&ans[2], (int *)&ans[3]);
-  dns_q = (struct dns_query*)(((char*) dns_hdr) + sizeof(struct dns_header));
- 
-  memcpy(&answer[0], dns_hdr->id, 2);
-  memcpy(&answer[2], "\x81\x80", 2);
-  memcpy(&answer[4], "\x00\x01", 2);
-  memcpy(&answer[6], "\x00\x01", 2);
-  memcpy(&answer[8], "\x00\x00", 2);
-  memcpy(&answer[10], "\x00\x00", 2);
- 
+  query = (struct dns_query*)(((char*) dns) + DNS_HEADER_SIZE);
+
+  memcpy(&answer[0], &dns->id, 2);
+  memcpy(&answer[2], "\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00", 10);
+
   size = strlen(request) + 2;
-  memcpy(&answer[12], dns_q, size);
+  memcpy(&answer[12], query, size);
   size += 12;
-  memcpy(&answer[size], "\x00\x01", 2);
-  size += 2;
-  memcpy(&answer[size], "\x00\x01", 2);
-  size += 2;
-  memcpy(&answer[size], "\xc0\x0c", 2);
-  size += 2;
-  memcpy(&answer[size], "\x00\x01", 2);
-  size += 2;
-  memcpy(&answer[size], "\x00\x01", 2);
-  size += 2;
-  memcpy(&answer[size], "\x00\x00\x00\x22", 4);
-  size += 4;
-  memcpy(&answer[size], "\x00\x04", 2);
-  size += 2;
+  memcpy(&answer[size], "\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x22\x00\x04", 16);
+  size += 16;
   memcpy(&answer[size], ans, 4);
   size += 4;
 
   return size;
 }
 
-void get_dns_req(struct dns_query *dns_q, char *request) {
+void get_ip(u_int32_t int_ip, char* ip) {
+  int i;
+  int buf[4];
+
+  for (i = 0; i < 4; i++) {
+    buf[i] = (int_ip >> (i * 8)) & 0xff;
+  }
+  sprintf(ip, "%d.%d.%d.%d", buf[0], buf[1], buf[2], buf[3]);
+}
+
+void get_dns(const u_char *packet, struct dns_header **dns, struct dns_query *query, char* src_ip, char* dst_ip, u_int16_t *port) {
+  struct iphdr *ip;
+  struct udphdr *udp;
+  unsigned int size;
+  struct ethernet_header *etherhdr;
+
+  etherhdr = (struct ethernet_header*)(packet);
+
+  ip = (struct iphdr*)(((char*) etherhdr) + ETHERNET_SIZE);
+  get_ip(ip->saddr, src_ip);
+  get_ip(ip->daddr, dst_ip);
+
+  size = ip->ihl * 4;
+  udp = (struct udphdr *)(((char*) ip) + size);
+  (*port) = ntohs((*(u_int16_t*)udp));
+
+  *dns = (struct dns_header*)(((char*) udp) + UDP_HEADER_SIZE);
+
+  query->qname = ((char*) *dns) + DNS_HEADER_SIZE;
+}
+
+void get_dns_req(struct dns_query *query, char *request) {
   unsigned int i, j, k;
-  char *curr = dns_q->qname;
+  char *curr = query->qname;
   unsigned int size;
 
   size = curr[0];
@@ -151,71 +132,56 @@ void get_dns_req(struct dns_query *dns_q, char *request) {
   request[--j] = '\0';
 }
 
-void get_ip(u_int32_t raw_ip, char* ip) {
-  int i;
-  int aux[4];
+void send_response(char* ip, char* packet, u_int16_t port, int packlen) {
+  struct sockaddr_in to_addr;
+  int bytes;
+  const int val = 1;
 
-  for (i = 0; i < 4; i++) {
-    aux[i] = (raw_ip >> (i * 8)) & 0xff;
+  to_addr.sin_family = AF_INET;
+  to_addr.sin_port = htons(port);
+  to_addr.sin_addr.s_addr = inet_addr(ip);
+
+  int sock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+  if (sock < 0) {
+    printf("Socket error");
+    return;
   }
 
-  sprintf(ip, "%d.%d.%d.%d", aux[0], aux[1], aux[2], aux[3]);
+  if (setsockopt(sock, IPPROTO_IP, IP_HDRINCL, &val, sizeof(int)) < 0) {
+    printf("setsockopt error");
+    return;
+  }
+
+  bytes = sendto(sock, packet, packlen, 0, (struct sockaddr *)&to_addr, sizeof(to_addr));
+  if (bytes <= 0)
+    printf("Error sending data");
 }
 
-void get_dns(const u_char *packet, struct dns_header **dns_hdr, struct dns_query *dns_q, char* src_ip, char* dst_ip, u_int16_t *port) {
-  struct ethernet_header *ether;
-  struct iphdr *ip;
-  struct udphdr *udp;
-  unsigned int iphdr_size;
-
-  /* ethernet header */
-  ether = (struct ethernet_header*)(packet);
-
-  /* ip header */
-  ip = (struct iphdr*)(((char*) ether) + sizeof(struct ethernet_header));
-  get_ip(ip->saddr, src_ip);
-  get_ip(ip->daddr, dst_ip);
-
-  /* udp header */
-  iphdr_size = ip->ihl * 4;
-  udp = (struct udphdr *)(((char*) ip) + iphdr_size);
-  (*port) = ntohs((*(u_int16_t*)udp));
-
-  /* dns header */
-  *dns_hdr = (struct dns_header*)(((char*) udp) + sizeof(struct udphdr));
-
-  dns_q->qname = ((char*) *dns_hdr) + sizeof(struct dns_header);
-
-}
-
-/**
- * Callback function to handle packets
- */
 void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet) {
-  struct dns_query dns_q;
-  struct dns_header *dns_hdr;
+  struct dns_query query;
+  struct dns_header *dns;
   struct list *head, *curr;
 
   char data[PKT_SIZE];
   char* answer;
   unsigned int size;
-  char req[REQUEST_SIZE];
-  char src_ip[IP_SIZE], dst_ip[IP_SIZE];
   u_int16_t port;
+  char req[100];
+  char src_ip[IP_SIZE], dst_ip[IP_SIZE];
 
   memset(data, 0, PKT_SIZE);
   head = (struct list *) args;
-  get_dns(packet, &dns_hdr, &dns_q, src_ip, dst_ip, &port);
-  get_dns_req(&dns_q, req);
+  get_dns(packet, &dns, &query, src_ip, dst_ip, &port);
+  get_dns_req(&query, req);
 
   curr = head;
-  while(curr != NULL) {
+  while (curr != NULL) {
     if (!strcmp(req, curr->host)) {
-      answer = data + sizeof(struct ip) + sizeof(struct udphdr);
-      size = get_ans(curr->ip, dns_hdr, answer, req);
+      answer = data + IP_HEADER_SIZE + UDP_HEADER_SIZE;
+      size = get_ans(curr->ip, dns, answer, req);
       get_data(data, size, src_ip, dst_ip, port);
-      size += (sizeof(struct ip) + sizeof(struct udphdr));
-      send_response(src_ip, port, data, size);
+      size += (IP_HEADER_SIZE + UDP_HEADER_SIZE);
+      send_response(src_ip, data, port, size);
       break;
     }
     curr = curr->next;
@@ -259,20 +225,18 @@ int main(int argc, char **argv) {
     switch (opt) {
     case 'i':
       interface = optarg;
-     
       break;
     case 'f':
       file = optarg;
-     
       break;
     default:
-      printf("Specify proper options\nUse mydump -h for Help\n");
+      printf("Specify proper options\n");
       return 0;
     }
   }
 
   if (optind < argc - 1) {
-    printf("Specify proper options\nUse mydump -h for Help\n");
+    printf("Specify proper options\n");
     return 0;
   } else if (optind == argc - 1)
     str = argv[argc - 1];
@@ -309,12 +273,12 @@ int main(int argc, char **argv) {
     strcat(expr, str);
   }
 
- 
+
   if (pcap_compile(handle, &filter, expr, 0, net) == -1) {
     printf("pcap_compile error : %s\n", pcap_geterr(handle));
     return 0;
   }
- 
+
   if (pcap_setfilter(handle, &filter) == -1) {
     printf("pcap_setfilter error : %s\n", pcap_geterr(handle));
     return 0;
